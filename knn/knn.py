@@ -5,7 +5,9 @@
 #import sys
 import logging
 
-#import numpy as np
+import numpy as np
+
+from heap_sort import min_k
 
 class K_NearestNeighbor(object):
     def __init__(self):
@@ -32,6 +34,10 @@ def main():
     logging.basicConfig(format="[%(levelname)s] %(asctime)s : %(message)s", level=logging.DEBUG)
     logging.info("Launch KNN model for CIFAR-10:")
     #path="../data/cifar-10-batches-py/batches.meta"
+    test_array = np.random.randint(0, 100, 10)
+    print test_array
+    top_k = min_k(test_array, k=5)
+    print top_k
 
     # load all data
 

@@ -49,15 +49,14 @@ def min_k(array, k=1):
         return
 
     top_k = array[:k]
-    sift_down(top_k, 0, k-1)
-    #print top_k
+    for index in xrange((len(top_k) // 2 -1), -1, -1):
+        sift_down(top_k, index, len(top_k) - 1)
     for idx in xrange(k, len(array)-1):
         if array[idx] >= top_k[0]:
             continue
         else:
             top_k[0] = array[idx]
             sift_down(top_k, 0, k-1)
-        #print top_k
     min_heap_sort(top_k)
 
     return top_k
@@ -65,8 +64,9 @@ def min_k(array, k=1):
 
 def main():
     np.random.seed(1107)
-    test_data = np.random.randint(0, 1000000, 100000)
-    #print "Raw: %s" % (test_data)
+    test_data = np.random.randint(0, 10, 10)
+    #test_data = [83, 6, 18, 50, 53, 28, 75, 27, 25, 43]
+    print "Raw: %s" % (test_data)
 
     #array = test_data
     #min_heap_sort(array)
