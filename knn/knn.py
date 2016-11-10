@@ -16,12 +16,16 @@ def unpickle(filename):
 def main():
 
     #path="../data/cifar-10-batches-py/batches.meta"
-    #data = unpickle(path)
 
-    path="../data/cifar-10-batches-py/data_batch_1"
-    data = unpickle(path)
-    print len(data['labels'])
-    print data['labels'][:10]
+    # load all data
+
+    # make K_NearestNeighbor classifier
+
+    # maybe do some validations
+
+    # load test data
+
+    # do prediction
 
 if __name__ == "__main__":
     main()
