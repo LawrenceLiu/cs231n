@@ -4,6 +4,7 @@
 #import os
 #import sys
 import logging
+from collections import Counter
 
 import numpy as np
 
@@ -25,12 +26,19 @@ class K_NearestNeighbor(object):
 
         for i in xrange(num_test):
             dis = np.sum(np.abs(self.X_train - X[i, :]), axis = 1)
-            min_idx = np.argmin(dis)
-            Y_pred[i] =  self.Y_train[min_idx]
-            if i % 10 == 0:
+            #min_idx = np.argmin(dis)
+            #Y_pred[i] =  self.Y_train[min_idx]
+            min_k_dis, min_k_idx = min_k(dis, k)
+            cnt = Counter([self.Y_train[x] for x in min_k_idx])
+            print min_k_dis
+            print min_k_idx
+            Y_pred[i] = cnt.most_common(1)[0][0]
+            print Y_pred[i]
+            if i % 10 == 9:
                 print "processed %d\r" % i
         print "Done !"
         print len(Y_pred)
+
 
 def unpickle(filename):
     import cPickle
@@ -67,8 +75,8 @@ def main():
     logging.basicConfig(format="[%(levelname)s] %(asctime)s : %(message)s", level=logging.DEBUG)
     logging.info("Launch KNN model for CIFAR-10:")
 
-    path="../data/cifar-10-batches-py/batches.meta"
-    meta = unpickle(path)
+    #path="../data/cifar-10-batches-py/batches.meta"
+    #meta = unpickle(path)
 
     # load all data
     train_X, train_Y = load_train_data()
@@ -79,8 +87,8 @@ def main():
     knn_model.train(train_X, train_Y)
 
     # do prediction
-    knn_model.predict(test_X)
-    #knn_model.predict(None, k=5)
+    #knn_model.predict(test_X)
+    knn_model.predict(test_X, k=5)
 
 if __name__ == "__main__":
     main()
