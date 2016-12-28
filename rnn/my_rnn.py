@@ -83,49 +83,47 @@ def main():
     data, data_size, vocab_size, chr2id, id2chr = load_data(test_file)
 
     # hyper params
-    hidden_size = 10
+    hidden_size = 200
     seq_len = 14
     learning_rate = 0.03
     my_rnn = RNN_onehot(vocab_size, hidden_size, learning_rate)
-    fout = open("output", 'w')
+    fsample = open("output", 'w')
 
     # main train loop
-    max_epoch = 30
+    max_epoch = 3000
     epoch = 0
     cur_idx = 0
     tic = time.time()
+    smooth_loss = -np.log(1.0/vocab_size) * seq_len
     while True:
         # get data
         if cur_idx + seq_len + 1 >= data_size or epoch == 0:
             my_rnn.reset_state()
-            #input_txt = [x for x in data[cur_idx:cur_idx+seq_len]]
-            #target_txt = [x for x in data[cur_idx+1:cur_idx+seq_len+1]]
             input_ids = [chr2id[x] for x in data[cur_idx:cur_idx+seq_len]]
             target_ids = [chr2id[x] for x in data[cur_idx+1:cur_idx+seq_len+1]]
 
         # make some test
-        if epoch % 100 == 0:
+        if epoch % 1000 == 0:
             start_seed = chr2id[" "]
-            predictions = my_rnn.predict(start_seed, 15)
+            predictions = my_rnn.predict(start_seed, 12)
             out = ''.join([id2chr[x] for x in predictions])
-            print >> fout, "-----epoch:%-8d-----" % epoch
-            print >> fout, out
-            print >> fout, "-"*24
+            print >> fsample, "-----epoch:%-8d-----" % epoch
+            print >> fsample, out
 
         # train and update params
         loss = my_rnn.fit(input_ids, target_ids)
-
+        smooth_loss = 0.99*smooth_loss + 0.01*loss
         # output training info
-        if epoch % 10 == 0:
+        if epoch % 100 == 0:
             toc = time.time()
-            logging.debug("epoch: %d, loss: %.6f time cost:%.6f", epoch, loss, toc-tic)
+            logging.debug("epoch: %d, loss: %.6f time cost:%.6f", epoch, smooth_loss, toc-tic)
             tic = toc
 
         # train and update params
         epoch += 1
         if epoch >= max_epoch:
             break
-        fout.close()
+    fsample.close()
 
 
 if __name__ == "__main__":
