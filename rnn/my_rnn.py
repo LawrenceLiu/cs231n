@@ -29,20 +29,39 @@ class RNN_onehot(object):
     def reset_state(self):
         self.state = np.zeros(shape=(self.hidden_size, 1))
 
+    def sample(self, seed_ix, n):
+        """
+        sample a sequence of integers from the model
+        h is memory state, seed_ix is seed letter for first time step
+        """
+        h = self.state
+        x = np.zeros((self.vocab_size, 1))
+        x[seed_ix] = 1
+        ixes = []
+        for t in xrange(n):
+            h = np.tanh(np.dot(self.Wxh, x) + np.dot(self.Whh, h) + self.bh)
+            y = np.dot(self.Why, h) + self.by
+            p = np.exp(y) / np.sum(np.exp(y))
+            ix = np.random.choice(range(self.vocab_size), p=p.ravel())
+            x = np.zeros((self.vocab_size, 1))
+            x[ix] = 1
+            ixes.append(ix)
+        return ixes
+
     def predict(self, start_seed, out_len):
         vocab = range(self.vocab_size)
         out_idxs = [0] * out_len
         h = np.copy(self.state)
         x = np.zeros(shape=(self.vocab_size, 1))
         x[start_seed] = 1
-
         for i in range(out_len):
             h = np.tanh(np.dot(self.Wxh, x) + np.dot(self.Whh, h) + self.bh)
             y = np.dot(self.Why, h) + self.by
             exp_y = np.exp(y)
-            Z = np.sum(exp_y)
-            p = exp_y / Z
+            p = exp_y / np.sum(exp_y)
             pred_idx = np.random.choice(vocab, p=p.ravel())
+            x = np.zeros(shape=(self.vocab_size, 1))
+            x[pred_idx] = 1
             out_idxs[i] = pred_idx
 
         return out_idxs
@@ -50,16 +69,12 @@ class RNN_onehot(object):
     def fit(self, input_ids, target_ids):
         loss = 0.0
         steps = len(input_ids)
-        #xs = [np.zeros(shape=(self.vocab_size, 1))] * steps
-        #hs = [np.zeros(shape=(self.hidden_size, 1))] * (steps+1)
-        #ys = [np.zeros(shape=(self.vocab_size, 1))] * steps
-        #ps = [np.zeros(shape=(self.vocab_size, 1))] * steps
         xs, hs, ys, ps = {}, {}, {}, {}
         # forward
         hs[-1] = np.copy(self.state)
         for i in xrange(steps):
             xs[i] = np.zeros(shape=(self.vocab_size, 1))
-            xs[i][input_ids[i], 0] = 1.
+            xs[i][input_ids[i], 0] = 1
             hs[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, hs[i-1]) + self.bh)
             ys[i] = np.dot(self.Why, hs[i]) + self.by
             exp_y = np.exp(ys[i])
@@ -93,6 +108,44 @@ class RNN_onehot(object):
         self.state = hs[steps-1]
         return loss
 
+    def lossFun(self, inputs, targets):
+        xs, hs, ys, ps = {}, {}, {}, {}
+        hs[-1] = np.copy(self.state)
+        loss = 0
+        # forward pass
+        for t in xrange(len(inputs)):
+            xs[t] = np.zeros((self.vocab_size,1)) # encode in 1-of-k representation
+            xs[t][inputs[t]] = 1
+            hs[t] = np.tanh(np.dot(self.Wxh, xs[t]) + np.dot(self.Whh, hs[t-1]) + self.bh) # hidden state
+            ys[t] = np.dot(self.Why, hs[t]) + self.by # unnormalized log probabilities for next chars
+            ps[t] = np.exp(ys[t]) / np.sum(np.exp(ys[t])) # probabilities for next chars
+            loss += -np.log(ps[t][targets[t],0]) # softmax (cross-entropy loss)
+        # backward pass: compute gradients going backwards
+        dWxh, dWhh, dWhy = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.Why)
+        dbh, dby = np.zeros_like(self.bh), np.zeros_like(self.by)
+        dhnext = np.zeros_like(hs[0])
+        for t in reversed(xrange(len(inputs))):
+            dy = np.copy(ps[t])
+            dy[targets[t]] -= 1 # backprop into y. see http://cs231n.github.io/neural-networks-case-study/#grad if confused here
+            dWhy += np.dot(dy, hs[t].T)
+            dby += dy
+            dh = np.dot(self.Why.T, dy) + dhnext # backprop into h
+            dhraw = (1 - hs[t] * hs[t]) * dh # backprop through tanh nonlinearity
+            dbh += dhraw
+            dWxh += np.dot(dhraw, xs[t].T)
+            dWhh += np.dot(dhraw, hs[t-1].T)
+            dhnext = np.dot(self.Whh.T, dhraw)
+        for dparam in [dWxh, dWhh, dWhy, dbh, dby]:
+            np.clip(dparam, -5, 5, out=dparam) # clip to mitigate exploding gradients
+        # perform parameter update with Adagrad
+        for param, dparam, mem in zip([self.Wxh, self.Whh, self.Why, self.bh, self.by],
+                                    [dWxh, dWhh, dWhy, dbh, dby],
+                                    [self.mWxh, self.mWhh, self.mWhy, self.mbh, self.mby]):
+            mem += dparam * dparam
+            param += self.alpha * dparam / np.sqrt(mem + 1e-8) # adagrad update
+        self.state = hs[len(inputs)-1]
+        return loss
+
 def load_data(filename):
     with open(filename, 'r') as fin:
         data = fin.read().decode('utf-8')
@@ -107,19 +160,20 @@ def main():
     logging.info("My RNN go!")
 
     # load data
-    test_file = "min-char-rnn.py"
+    test_file = "input_102.txt"
+    #test_file = "min-char-rnn.py"
     #test_file = "input_101.txt"
     data, data_size, vocab_size, chr2id, id2chr = load_data(test_file)
 
     # hyper params
-    hidden_size = 500
-    seq_len = 64
-    learning_rate = 0.01
+    hidden_size = 100
+    seq_len = 25
+    learning_rate = 0.03
     my_rnn = RNN_onehot(vocab_size, hidden_size, learning_rate)
     fsample = open("output", 'w')
 
     # main train loop
-    max_epoch = 1000
+    max_epoch = 5000
     epoch = 0
     cur_idx = 0
     tic = time.time()
@@ -128,30 +182,34 @@ def main():
         # get data
         if cur_idx + seq_len + 1 >= data_size or epoch == 0:
             my_rnn.reset_state()
-            input_ids = [chr2id[x] for x in data[cur_idx:cur_idx+seq_len]]
-            target_ids = [chr2id[x] for x in data[cur_idx+1:cur_idx+seq_len+1]]
+            cur_idx = 0
+        input_ids = [chr2id[x] for x in data[cur_idx:cur_idx+seq_len]]
+        target_ids = [chr2id[x] for x in data[cur_idx+1:cur_idx+seq_len+1]]
 
         # make some test
         if epoch % 100 == 0:
-            start_seed = chr2id["#"]
-            predictions = my_rnn.predict(start_seed, 2000)
+            start_seed = chr2id[' ']
+            predictions = my_rnn.predict(start_seed, 200)
+            #predictions = my_rnn.sample(start_seed, 200)
             out = ''.join([id2chr[x] for x in predictions])
             #print >> fsample, "-----epoch:%-8d-----" % epoch
             #print >> fsample, out
-            print out
+            print "----\n%s\n----" % out
 
         # train and update params
         loss = my_rnn.fit(input_ids, target_ids)
+        #loss = my_rnn.lossFun(input_ids, target_ids)
         smooth_loss = 0.99*smooth_loss + 0.01*loss
         # output training info
-        if epoch % 10 == 0:
+        if epoch % 100 == 0:
             toc = time.time()
             logging.debug("epoch: %d, loss: %.6f time cost:%.6f", epoch, smooth_loss, toc-tic)
             tic = toc
 
         # train and update params
+        cur_idx += seq_len
         epoch += 1
-        if epoch >= max_epoch:
+        if epoch > max_epoch:
             break
     fsample.close()
 
