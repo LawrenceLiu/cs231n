@@ -18,6 +18,12 @@ class RNN_onehot(object):
         self.Why = np.random.uniform(low=-0.01, high=0.01, size=(vocab_size, hidden_size))
         self.by = np.zeros(shape=(vocab_size, 1))
 
+        self.mWxh = np.zeros_like(self.Wxh)
+        self.mWhh = np.zeros_like(self.Whh)
+        self.mbh = np.zeros_like(self.bh)
+        self.mWhy = np.zeros_like(self.Why)
+        self.mby = np.zeros_like(self.by)
+
         self.reset_state()
 
     def reset_state(self):
@@ -78,9 +84,12 @@ class RNN_onehot(object):
         for dparam in [dWxh, dWhh, dWhy, dbh, dby]:
             np.clip(dparam, -5, 5, out=dparam) # clip to mitigate exploding gradients
         # update params
-        for param, dparam in zip([self.Wxh, self.Whh, self.Why, self.bh, self.by],
-                                 [dWxh, dWhh, dWhy, dbh, dby]):
-            param += self.alpha * dparam
+        for param, dparam, mem in zip([self.Wxh, self.Whh, self.Why, self.bh, self.by],
+                                        [dWxh, dWhh, dWhy, dbh, dby],
+                                        [self.mWxh, self.mWhh, self.mWhy, self.mbh, self.mby]):
+            mem += dparam**2
+            param += self.alpha * dparam / np.sqrt(mem + 1e-8)
+            #param += self.alpha * dparam
         self.state = hs[steps-1]
         return loss
 
@@ -124,11 +133,12 @@ def main():
 
         # make some test
         if epoch % 100 == 0:
-            start_seed = chr2id[" "]
+            start_seed = chr2id["#"]
             predictions = my_rnn.predict(start_seed, 2000)
             out = ''.join([id2chr[x] for x in predictions])
-            print >> fsample, "-----epoch:%-8d-----" % epoch
-            print >> fsample, out
+            #print >> fsample, "-----epoch:%-8d-----" % epoch
+            #print >> fsample, out
+            print out
 
         # train and update params
         loss = my_rnn.fit(input_ids, target_ids)
