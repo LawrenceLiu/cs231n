@@ -8,7 +8,7 @@ import numpy as np
 
 
 def sigmoid(x):
-    return 1/(1+np.exp(x))
+    return 1/(1+np.exp(-x))
 
 class RNNOneHot(object):
     def __init__(self, vocab_size, hidden_size, learning_rate):
@@ -118,12 +118,21 @@ class GRUOneHot(object):
         self.Why = np.random.uniform(low=-0.01, high=0.01, size=(vocab_size, hidden_size))
         self.by = np.zeros(shape=(vocab_size, 1))
 
-        self.mWxh = np.zeros_like(self.Wxh)
-        self.mWhh = np.zeros_like(self.Whh)
-        self.mbh = np.zeros_like(self.bh)
-        self.mWhy = np.zeros_like(self.Why)
-        self.mby = np.zeros_like(self.by)
+        self.params = [self.Wxz, self.Whz, self.bz,
+                       self.Wxr, self.Whr, self.br,
+                       self.Wxh, self.Whh, self.bh,
+                       self.Why, self.by]
 
+        self.mWxz, self.mWhz, self.mbz = np.zeros_like(self.Wxz), np.zeros_like(self.Whz), np.zeros_like(self.bz)
+        self.mWxr, self.mWhr, self.mbr = np.zeros_like(self.Wxr), np.zeros_like(self.Whr), np.zeros_like(self.br)
+        self.mWxh, self.mWhh, self.mbh = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.bh)
+        self.mWhy, self.mby = np.zeros_like(self.Why), np.zeros_like(self.by)
+
+        self.mem = [self.mWxz, self.mWhz, self.mbz,
+                    self.mWxr, self.mWhr, self.mbr,
+                    self.mWxh, self.mWhh, self.mbh,
+                    self.mWhy, self.mby]
+        # hidden state
         self.state = np.zeros(shape=(self.hidden_size, 1))
 
     def reset_state(self):
@@ -150,7 +159,7 @@ class GRUOneHot(object):
 
         return out_idxs
 
-    def fit(self, input_ids, target_ids):
+    def copy_fit(self, input_ids, target_ids):
         loss = 0.0
         steps = len(input_ids)
         xs, zs, rs, h_hats, hs, ys, ps = {}, {}, {}, {}, {}, {}, {}
@@ -159,18 +168,83 @@ class GRUOneHot(object):
         for i in xrange(steps):
             xs[i] = np.zeros(shape=(self.vocab_size, 1))
             xs[i][input_ids[i], 0] = 1
-            zs[i] = sigmoid(np.dot(self.Wxz, xs[i]) + np.dot(self.Whz, hs[i-1]) + self.bz)
-            rs[i] = sigmoid(np.dot(self.Wxr, xs[i]) + np.dot(self.Whr, hs[i-1]) + self.br)
-            h_hats[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, (hs[i-1] * rs[i])) + self.bh)
-            hs[i] = (1 - zs[i]) * h_hats[i] + zs[i] * hs[i-1]
+            hs[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, hs[i-1]) + self.bh)
             ys[i] = np.dot(self.Why, hs[i]) + self.by
             exp_y = np.exp(ys[i])
             ps[i] = exp_y / np.sum(exp_y)
             loss += -np.log(ps[i][target_ids[i], 0])
-        # # backward
-        # dWxh, dWhh, dWhy = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.Why)
-        # dbh, dby = np.zeros_like(self.bh), np.zeros_like(self.by)
-        # dhnext = np.zeros_like(hs[0])
+        # backward
+        dWxz, dWhz, dbz = np.zeros_like(self.Wxz), np.zeros_like(self.Whz), np.zeros_like(self.bz)
+        dWxr, dWhr, dbr = np.zeros_like(self.Wxr), np.zeros_like(self.Whr), np.zeros_like(self.br)
+        dWxh, dWhh, dbh = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.bh)
+        dWhy, dby = np.zeros_like(self.Why), np.zeros_like(self.by)
+        dhnext = np.zeros_like(hs[0])
+        for t in reversed(xrange(steps)):
+            dy = np.copy(ps[t])
+            dy[target_ids[t]] -= 1
+            dWhy += np.dot(dy, hs[t].T)
+            dby += dy
+            dh = np.dot(self.Why.T, dy) + dhnext  # backprop into h
+            dhraw = (1 - hs[t] * hs[t]) * dh  # backprop through tanh nonlinearity
+            dbh += dhraw
+            dWxh += np.dot(dhraw, xs[t].T)
+            dWhh += np.dot(dhraw, hs[t - 1].T)
+            dhnext = np.dot(self.Whh.T, dhraw)
+        # # params clip
+        # for dparam in [dWxh, dWhh, dWhy, dbh, dby]:
+        #     np.clip(dparam, -5, 5, out=dparam)  # clip to mitigate exploding gradients
+        # update params
+        dparams = [dWxz, dWhz, dbz,
+                   dWxr, dWhr, dbr,
+                   dWxh, dWhh, dbh,
+                   dWhy, dby]
+        # params clip
+        for dparam in dparams:
+            np.clip(dparam, -5.0, 5.0, out=dparam)  # clip to mitigate exploding gradients
+        # update params
+        for param, dparam, mem in zip(self.params, dparams, self.mem):
+            mem += dparam**2
+            param += self.alpha * dparam / np.sqrt(mem + 1e-8)
+            # param += self.alpha * dparam
+        # update hidden state
+        self.state = hs[steps-1]
+        return loss
+
+    def fit(self, input_ids, target_ids):
+        loss = 0.0
+        steps = len(input_ids)
+        xs, zs, rs, h_hats, hs, ys, ps = {}, {}, {}, {}, {}, {}, {}
+        # forward
+        hs[-1] = np.copy(self.state)
+        # for i in xrange(steps):
+        #     xs[i] = np.zeros(shape=(self.vocab_size, 1))
+        #     xs[i][input_ids[i], 0] = 1
+        #     hs[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, hs[i-1]) + self.bh)
+        #     ys[i] = np.dot(self.Why, hs[i]) + self.by
+        #     exp_y = np.exp(ys[i])
+        #     ps[i] = exp_y / np.sum(exp_y)
+        #     loss += -np.log(ps[i][target_ids[i], 0])
+        for i in xrange(steps):
+            xs[i] = np.zeros(shape=(self.vocab_size, 1))
+            xs[i][input_ids[i], 0] = 1
+            # zs[i] = sigmoid(np.dot(self.Wxz, xs[i]) + np.dot(self.Whz, hs[i-1]) + self.bz)
+            # rs[i] = sigmoid(np.dot(self.Wxr, xs[i]) + np.dot(self.Whr, hs[i-1]) + self.br)
+            # h_hats[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, (hs[i-1] * rs[i])) + self.bh)
+            h_hats[i] = np.tanh(np.dot(self.Wxh, xs[i]) + np.dot(self.Whh, hs[i-1]) + self.bh)
+            # hs[i] = (1 - zs[i]) * h_hats[i] + zs[i] * hs[i-1]
+            hs[i] = (1 - 0.5) * h_hats[i] + 0.5 * hs[i-1]
+            ys[i] = np.dot(self.Why, hs[i]) + self.by
+            exp_y = np.exp(ys[i])
+            ps[i] = exp_y / np.sum(exp_y)
+            loss += -np.log(ps[i][target_ids[i], 0])
+
+        # backward
+        dWxz, dWhz, dbz = np.zeros_like(self.Wxz), np.zeros_like(self.Whz), np.zeros_like(self.bz)
+        dWxr, dWhr, dbr = np.zeros_like(self.Wxr), np.zeros_like(self.Whr), np.zeros_like(self.br)
+        dWxh, dWhh, dbh = np.zeros_like(self.Wxh), np.zeros_like(self.Whh), np.zeros_like(self.bh)
+        dWhy, dby = np.zeros_like(self.Why), np.zeros_like(self.by)
+        dhnext = np.zeros_like(hs[0])
+
         # for t in reversed(xrange(steps)):
         #     dy = np.copy(ps[t])
         #     dy[target_ids[t]] -= 1
@@ -180,18 +254,59 @@ class GRUOneHot(object):
         #     dhraw = (1 - hs[t] * hs[t]) * dh  # backprop through tanh nonlinearity
         #     dbh += dhraw
         #     dWxh += np.dot(dhraw, xs[t].T)
-        #     dWhh += np.dot(dhraw, hs[t-1].T)
+        #     dWhh += np.dot(dhraw, hs[t - 1].T)
         #     dhnext = np.dot(self.Whh.T, dhraw)
-        # # params clip
-        # for dparam in [dWxh, dWhh, dWhy, dbh, dby]:
-        #     np.clip(dparam, -5, 5, out=dparam)  # clip to mitigate exploding gradients
-        # # update params
-        # for param, dparam, mem in zip([self.Wxh, self.Whh, self.Why, self.bh, self.by],
-        #                               [dWxh, dWhh, dWhy, dbh, dby],
-        #                               [self.mWxh, self.mWhh, self.mWhy, self.mbh, self.mby]):
-        #     mem += dparam**2
-        #     param += self.alpha * dparam / np.sqrt(mem + 1e-8)
-        #     # p aram += self.alpha * dparam
+
+        for t in reversed(xrange(steps)):
+            dy = np.copy(ps[t])
+            dy[target_ids[t]] -= 1
+
+            # dh = np.dot(self.Why.T, dy) + dhnext  # backprop into h
+            # dhraw = (1 - hs[t] * hs[t]) * dh  # backprop through tanh nonlinearity
+            # dbh += dhraw
+            # dWxh += np.dot(dhraw, xs[t].T)
+            # dWhh += np.dot(dhraw, hs[t - 1].T)
+            # dhnext = np.dot(self.Whh.T, dhraw)
+            dby += dy
+            dWhy += np.dot(dy, hs[t].T)
+            dh = np.dot(self.Why.T, dy) + dhnext  # backprop into h
+
+            # dh_hat = -zs[t] * dh
+            # dhnext = zs[t]
+            dh_hat = -0.5 * dh
+            dhnext = zs[t] * dh
+            dz = (-1 * h_hats[i] + hs[i-1]) * dh
+
+            # dh_hatraw = (1-h_hats[t]**2) * dh_hat
+            # dbh += dh_hatraw
+            # dWhh += np.dot(dh_hatraw, hs[t-1].T)
+            # dWxh += np.dot(dh_hatraw, xs[t].T)
+            # dhnext += np.dot(self.Whh.T, dh_hatraw) * rs[t]
+            # dr = np.dot(self.Whh.T, dh_hatraw) * hs[t-1]
+			#
+            # dbr += dr
+            # dWhr += np.dot(dr, hs[t - 1].T)
+            # dWxr += np.dot(dr, xs[t].T)
+            # dhnext += np.dot(self.Whr.T, dr)
+			#
+            # dbz += dz
+            # dWhz += np.dot(dz, hs[t - 1].T)
+            # dWxz += np.dot(dz, xs[t].T)
+            # dhnext += np.dot(self.Whz.T, dz)
+
+        dparams = [dWxz, dWhz, dbz,
+                   dWxr, dWhr, dbr,
+                   dWxh, dWhh, dbh,
+                   dWhy, dby]
+        # params clip
+        for dparam in dparams:
+            np.clip(dparam, -5.0, 5.0, out=dparam)  # clip to mitigate exploding gradients
+        # update params
+        for param, dparam, mem in zip(self.params, dparams, self.mem):
+            mem += dparam**2
+            param += self.alpha * dparam / np.sqrt(mem + 1e-8)
+            # param += self.alpha * dparam
+        # update hidden state
         self.state = hs[steps-1]
         return loss
 
@@ -217,7 +332,7 @@ def main():
     data, data_size, vocab_size, chr2id, id2chr = load_data(test_file)
 
     # hyper params
-    hidden_size = 200
+    hidden_size = 100
     seq_len = 25
     learning_rate = 0.01
     # my_rnn = RNNOneHot(vocab_size, hidden_size, learning_rate)
@@ -225,7 +340,7 @@ def main():
     fsample = open("output", 'w')
 
     # main train loop
-    max_epoch = 1000
+    max_epoch = 5000
     epoch = 0
     cur_idx = 0
     tic = time.time()
@@ -250,10 +365,10 @@ def main():
 
         # train and update params
         loss = my_rnn.fit(input_ids, target_ids)
-        # loss = my_rnn.lossFun(input_ids, target_ids)
+        # loss = my_rnn.copy_fit(input_ids, target_ids)
         smooth_loss = 0.99*smooth_loss + 0.01*loss
         # output training info
-        if epoch % 100 == 0:
+        if epoch % 10 == 0:
             toc = time.time()
             logging.debug("epoch: %d, loss: %.6f time cost:%.6f", epoch, smooth_loss, toc-tic)
             tic = toc
